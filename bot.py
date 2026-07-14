@@ -7,6 +7,7 @@ import zipfile
 import urllib.request
 import json
 import logging
+from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 if not config.BOT_TOKEN or not config.API_ID or not config.API_HASH:
     logger.error("TELEGRAM_BOT_TOKEN, TELEGRAM_API_ID, or TELEGRAM_API_HASH is missing!")
     sys.exit(1)
+
+# Path to persistent usage limits file
+USAGE_FILE = os.path.join(config.WORKSPACE_DIR, "usage.json")
 
 # Initialize Pyrogram Bot Client
 app = Client(
@@ -85,6 +89,46 @@ def fetch_magiskboot():
             except Exception:
                 pass
 
+def load_usage():
+    """Loads usage data from file."""
+    if os.path.exists(USAGE_FILE):
+        try:
+            with open(USAGE_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_usage(usage_data):
+    """Saves usage data to file."""
+    try:
+        with open(USAGE_FILE, "w") as f:
+            json.dump(usage_data, f)
+    except Exception as e:
+        logger.error(f"Failed to save usage file: {e}")
+
+def check_and_increment_usage(user_id):
+    """Checks if a user is within their daily limit and increments usage if allowed."""
+    if user_id == config.OWNER_ID:
+        return True, 0
+
+    usage_data = load_usage()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    
+    user_key = str(user_id)
+    user_history = usage_data.get(user_key, {})
+    today_count = user_history.get(today, 0)
+
+    if today_count >= 3:
+        return False, today_count
+
+    # Increment and save
+    # Keep only today's date to prevent file bloat
+    usage_data[user_key] = {today: today_count + 1}
+    save_usage(usage_data)
+    
+    return True, today_count + 1
+
 @app.on_message(filters.command(["start", "help"]))
 async def send_welcome(client: Client, message: Message):
     """Sends welcome message and usage instructions."""
@@ -96,13 +140,21 @@ async def send_welcome(client: Client, message: Message):
         "1. Upload your kernel's `boot.img` as a document.\n"
         "2. The bot will automatically unpack it, pull AnyKernel, swap the kernel, and pack it.\n"
         "3. You will receive the compiled flashable zip file in seconds.\n\n"
-        "⚠️ **Note**: This bot uses MTProto, meaning it supports files up to **2 GB**!"
+        "⚠️ **Note**: Users are limited to **3 compiles per day**."
     )
     await message.reply_text(welcome_text)
 
 @app.on_message(filters.document)
 async def handle_boot_img(client: Client, message: Message):
     """Handles the incoming boot.img file, unpacks, replaces kernel, and repacks."""
+    user_id = message.from_user.id
+    
+    # Check limit before processing
+    allowed, count = check_and_increment_usage(user_id)
+    if not allowed:
+        await message.reply_text("🛑 **Limit Exceeded!** You have reached your daily limit of **3 compiles per day**.")
+        return
+
     document = message.document
     file_name = document.file_name
     
@@ -181,11 +233,15 @@ async def handle_boot_img(client: Client, message: Message):
 
         await status_msg.edit_text("📤 Uploading zip archive...")
 
+        caption = "✅ **AnyKernel Flashable Zip compiled successfully!**"
+        if user_id != config.OWNER_ID:
+            caption += f"\n📊 *Remaining runs today: {3 - count}*"
+
         await client.send_document(
             chat_id=message.chat.id,
             document=zip_file_path,
             reply_to_message_id=message.id,
-            caption="✅ **AnyKernel Flashable Zip compiled successfully!**"
+            caption=caption
         )
 
         await status_msg.delete()

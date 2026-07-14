@@ -41,6 +41,7 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
         TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        OWNER_ID: ${{ secrets.OWNER_ID }}
         ANYKERNEL_REPO: ${{ secrets.ANYKERNEL_REPO }}
         ANYKERNEL_BRANCH: ${{ secrets.ANYKERNEL_BRANCH }}
       run: |

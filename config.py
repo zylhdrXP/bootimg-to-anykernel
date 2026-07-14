@@ -5,6 +5,9 @@ API_ID = os.environ.get("TELEGRAM_API_ID")
 API_HASH = os.environ.get("TELEGRAM_API_HASH")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
+# Bot Owner's Telegram User ID (Exempt from daily limits)
+OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+
 # AnyKernel3 Repository Configuration
 ANYKERNEL_REPO = os.environ.get("ANYKERNEL_REPO", "https://github.com/osm0sis/AnyKernel3.git")
 ANYKERNEL_BRANCH = os.environ.get("ANYKERNEL_BRANCH", "master")

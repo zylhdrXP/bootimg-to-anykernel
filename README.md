@@ -9,11 +9,12 @@ This bot uses Pyrogram (MTProto client) rather than standard HTTP Bot API, allow
 ## ⚙️ How it Works
 
 1. **User Interaction**: The user starts the bot using `/start` or `/help` and uploads a `.img` file (e.g. `boot.img`).
-2. **Magiskboot Extraction**: The bot automatically resolves and extracts `magiskboot` (x86_64 host binary) from the latest Magisk APK released on GitHub.
-3. **Unpacking**: The bot runs `./magiskboot unpack boot.img` inside an isolated temporary directory unique to the session (ensuring multiple users can run jobs simultaneously).
-4. **Renaming & AnyKernel Integration**: The extracted `kernel` is renamed to `Image` and integrated into a freshly cloned clone of the AnyKernel repository.
-5. **Repacking**: The AnyKernel folder contents are zipped (with files placed at the root level).
-6. **Delivery & Cleanup**: The flashable zip is uploaded to the user, and the temporary workspace is immediately deleted to ensure security and disk space efficiency.
+2. **Usage Limit Checks**: The bot checks if the user is within their daily usage limit of **3 runs per day**. If the user matches the configured `OWNER_ID`, the limit check is bypassed entirely.
+3. **Magiskboot Extraction**: The bot automatically resolves and extracts `magiskboot` (x86_64 host binary) from the latest Magisk APK released on GitHub.
+4. **Unpacking**: The bot runs `./magiskboot unpack boot.img` inside an isolated temporary directory unique to the session (ensuring multiple users can run jobs simultaneously).
+5. **Renaming & AnyKernel Integration**: The extracted `kernel` is renamed to `Image` and integrated into a freshly cloned clone of the AnyKernel repository.
+6. **Repacking**: The AnyKernel folder contents are zipped (with files placed at the root level).
+7. **Delivery & Cleanup**: The flashable zip is uploaded to the user, and the temporary workspace is immediately deleted to ensure security and disk space efficiency.
 
 ---
 
@@ -29,7 +30,7 @@ This bot uses Pyrogram (MTProto client) rather than standard HTTP Bot API, allow
 
 ## 🚀 Setup & credentials
 
-Because this bot runs on MTProto, you need both a **Bot Token** and your personal **Telegram API ID/Hash**.
+Because this bot runs on MTProto, you need a **Bot Token**, your personal **Telegram API ID/Hash**, and your **Telegram User ID** if you want to bypass usage limits.
 
 ### 1. Get a Bot Token
 1. Open Telegram and search for [@BotFather](https://t.me/BotFather).
@@ -41,6 +42,11 @@ Because this bot runs on MTProto, you need both a **Bot Token** and your persona
 2. Go to **API development tools**.
 3. Create a new application (you can fill in random values for name and URL).
 4. Copy your **App api_id** and **App api_hash**.
+
+### 3. Get Your Telegram User ID (for Owner Bypass)
+1. Open Telegram and search for [@userinfobot](https://t.me/userinfobot) or [@raw_data_bot](https://t.me/raw_data_bot).
+2. Send any message to the bot.
+3. Copy the numeric **Id** returned (e.g. `123456789`). Set this as `OWNER_ID`.
 
 ---
 
@@ -59,6 +65,7 @@ Since GitHub Actions has a 6-hour execution timeout limit per workflow run, this
    - `TELEGRAM_BOT_TOKEN`: Paste your HTTP API Bot Token.
    - `TELEGRAM_API_ID`: Paste your `api_id`.
    - `TELEGRAM_API_HASH`: Paste your `api_hash`.
+   - `OWNER_ID`: Paste your numeric Telegram User ID.
 4. (Optional) Add the following repository secrets to customize:
    - `ANYKERNEL_REPO`: Custom AnyKernel Git repository (defaults to `https://github.com/osm0sis/AnyKernel3.git`).
    - `ANYKERNEL_BRANCH`: Custom repository branch (defaults to `master`).
@@ -149,3 +156,4 @@ To ensure the bot restarts automatically if the server reboots or crashes, creat
    - 🤐 *Creating flashable zip archive...*
    - 📤 *Uploading zip archive...*
 4. In moments, you will receive the compiled flashable zip file back.
+5. Non-owner users are restricted to 3 successful compiles daily. The caption will report the remaining count.
