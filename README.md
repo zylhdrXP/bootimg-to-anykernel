@@ -24,7 +24,7 @@ This bot uses Pyrogram (MTProto client) rather than standard HTTP Bot API, allow
 - `config.py` — Central configuration logic sourcing setup parameters from environment variables.
 - `.env.example` — Template configuration file for local or VPS deployment.
 - `requirements.txt` — Python dependencies (Pyrogram and Tgcrypto).
-- `.github/workflows/run-bot.yml` — GitHub Actions workflow for serverless deployment.
+- `.github/workflows/main.yml` — GitHub Actions workflow for serverless deployment.
 
 ---
 

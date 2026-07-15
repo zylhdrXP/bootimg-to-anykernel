@@ -2,11 +2,11 @@ import os
 import sys
 import shutil
 import tempfile
-import subprocess
-import zipfile
+import asyncio
 import urllib.request
 import json
 import logging
+import zipfile
 from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -123,100 +123,69 @@ def check_and_increment_usage(user_id):
         return False, today_count
 
     # Increment and save
-    # Keep only today's date to prevent file bloat
     usage_data[user_key] = {today: today_count + 1}
     save_usage(usage_data)
     
     return True, today_count + 1
 
-@app.on_message(filters.command(["start", "help"]))
-async def send_welcome(client: Client, message: Message):
-    """Sends welcome message and usage instructions."""
-    welcome_text = (
-        "🤖 **Boot.img to AnyKernel Flashable Zip Bot**\n\n"
-        "Send me a `boot.img` file as a document, and I will extract the kernel "
-        "and package it into a flashable AnyKernel zip file.\n\n"
-        "📌 **How to use:**\n"
-        "1. Upload your kernel's `boot.img` as a document.\n"
-        "2. The bot will automatically unpack it, pull AnyKernel, swap the kernel, and pack it.\n"
-        "3. You will receive the compiled flashable zip file in seconds.\n\n"
-        "⚠️ **Note**: Users are limited to **3 compiles per day**."
-    )
-    await message.reply_text(welcome_text)
-
-@app.on_message(filters.document)
-async def handle_boot_img(client: Client, message: Message):
-    """Handles the incoming boot.img file, unpacks, replaces kernel, and repacks."""
-    user_id = message.from_user.id
-    
-    # Check limit before processing
-    allowed, count = check_and_increment_usage(user_id)
-    if not allowed:
-        await message.reply_text("🛑 **Limit Exceeded!** You have reached your daily limit of **3 compiles per day**.")
-        return
-
-    document = message.document
-    file_name = document.file_name
-    
-    if not file_name.lower().endswith(".img"):
-        await message.reply_text("❌ Invalid file! Please upload a `.img` file (e.g., `boot.img`).")
-        return
-
-    status_msg = await message.reply_text("⏳ Downloading your boot image...")
-
-    temp_dir = tempfile.mkdtemp(dir=config.WORKSPACE_DIR)
-    boot_path = os.path.join(temp_dir, "boot.img")
-
+async def process_boot_img(client: Client, message: Message, boot_path: str, temp_dir: str, status_msg: Message, remaining_runs: int):
+    """Core repacking pipeline from an unpacked boot image path to final upload."""
     try:
-        # Pyrogram handles large downloads natively
-        await client.download_media(document, file_name=boot_path)
-
         await status_msg.edit_text("🔧 Verifying magiskboot tool...")
-        if not fetch_magiskboot():
+        # Check and download magiskboot in executor to prevent blocking
+        loop = asyncio.get_running_loop()
+        magiskboot_ready = await loop.run_in_executor(None, fetch_magiskboot)
+        if not magiskboot_ready:
             await status_msg.edit_text("❌ Internal Error: Failed to retrieve or prepare the `magiskboot` binary.")
             return
 
         await status_msg.edit_text("📦 Unpacking boot image...")
         
-        unpack_process = subprocess.run(
-            [config.MAGISKBOOT_PATH, "unpack", "boot.img"],
+        # Execute magiskboot asynchronously
+        unpack_process = await asyncio.create_subprocess_exec(
+            config.MAGISKBOOT_PATH, "unpack", "boot.img",
             cwd=temp_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
+        _, stderr = await unpack_process.communicate()
 
         if unpack_process.returncode != 0:
-            err_msg = unpack_process.stderr or "Unknown unpack error."
+            err_msg = stderr.decode().strip() or "Unknown unpack error."
             logger.error(f"magiskboot unpack failed: {err_msg}")
             await status_msg.edit_text(f"❌ Failed to unpack the boot image!\n\n**Error details:**\n`{err_msg[:300]}`")
             return
 
+        # Find extracted kernel
         kernel_path = os.path.join(temp_dir, "kernel")
         if not os.path.exists(kernel_path):
             await status_msg.edit_text("❌ Kernel was not found in the unpacked boot image. Make sure you uploaded a valid boot.img.")
             return
 
+        # Rename kernel to Image
         image_path = os.path.join(temp_dir, "Image")
         os.rename(kernel_path, image_path)
 
         await status_msg.edit_text("🗂️ Cloning AnyKernel repository...")
 
         anykernel_dir = os.path.join(temp_dir, "AnyKernel")
-        clone_cmd = [
+        clone_process = await asyncio.create_subprocess_exec(
             "git", "clone", "--depth", "1",
             "-b", config.ANYKERNEL_BRANCH,
             config.ANYKERNEL_REPO,
-            anykernel_dir
-        ]
-        clone_process = subprocess.run(clone_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            anykernel_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await clone_process.communicate()
 
         if clone_process.returncode != 0:
-            err_msg = clone_process.stderr or "Unknown git clone error."
+            err_msg = stderr.decode().strip() or "Unknown git clone error."
             logger.error(f"Git clone failed: {err_msg}")
             await status_msg.edit_text(f"❌ Failed to clone the AnyKernel repository!\n\n**Error details:**\n`{err_msg[:300]}`")
             return
 
+        # Copy the extracted Image file into AnyKernel repo (overwriting any dummy Image)
         dest_image_path = os.path.join(anykernel_dir, "Image")
         shutil.copy2(image_path, dest_image_path)
         logger.info(f"Replaced Image in AnyKernel: {dest_image_path}")
@@ -224,7 +193,9 @@ async def handle_boot_img(client: Client, message: Message):
         await status_msg.edit_text("🤐 Creating flashable zip archive...")
 
         zip_base_name = os.path.join(temp_dir, "AnyKernel_Flashable")
-        shutil.make_archive(zip_base_name, "zip", anykernel_dir)
+        
+        # Run archiving in executor to keep loop non-blocking
+        await loop.run_in_executor(None, lambda: shutil.make_archive(zip_base_name, "zip", anykernel_dir))
         zip_file_path = zip_base_name + ".zip"
 
         if not os.path.exists(zip_file_path):
@@ -234,8 +205,8 @@ async def handle_boot_img(client: Client, message: Message):
         await status_msg.edit_text("📤 Uploading zip archive...")
 
         caption = "✅ **AnyKernel Flashable Zip compiled successfully!**"
-        if user_id != config.OWNER_ID:
-            caption += f"\n📊 *Remaining runs today: {3 - count}*"
+        if message.from_user.id != config.OWNER_ID:
+            caption += f"\n📊 *Remaining runs today: {remaining_runs}*"
 
         await client.send_document(
             chat_id=message.chat.id,
@@ -256,6 +227,94 @@ async def handle_boot_img(client: Client, message: Message):
                 logger.info(f"Temporary directory cleaned: {temp_dir}")
             except Exception as e:
                 logger.error(f"Failed to remove temp dir {temp_dir}: {e}")
+
+@app.on_message(filters.command(["start", "help"]))
+async def send_welcome(client: Client, message: Message):
+    """Sends welcome message and usage instructions."""
+    welcome_text = (
+        "🤖 **Boot.img to AnyKernel Flashable Zip Bot**\n\n"
+        "Send me a `boot.img` file as a document **OR** send a direct download link "
+        "starting with `http` or `https`.\n\n"
+        "📌 **How to use:**\n"
+        "1. Upload your kernel's `boot.img` as a document OR paste its direct download link.\n"
+        "2. The bot will automatically download, unpack it, clone AnyKernel, swap the kernel, and pack it.\n"
+        "3. You will receive the compiled flashable zip file in seconds.\n\n"
+        "⚠️ **Note**: Users are limited to **3 compiles per day** (bot owner is exempt)."
+    )
+    await message.reply_text(welcome_text)
+
+@app.on_message(filters.document)
+async def handle_boot_img_file(client: Client, message: Message):
+    """Handles the incoming boot.img file upload."""
+    user_id = message.from_user.id
+    document = message.document
+    file_name = document.file_name
+    
+    if not file_name.lower().endswith(".img"):
+        await message.reply_text("❌ Invalid file! Please upload a `.img` file (e.g., `boot.img`).")
+        return
+
+    # Check limit before processing
+    allowed, count = check_and_increment_usage(user_id)
+    if not allowed:
+        await message.reply_text("🛑 **Limit Exceeded!** You have reached your daily limit of **3 compiles per day**.")
+        return
+
+    status_msg = await message.reply_text("⏳ Downloading your boot image...")
+    temp_dir = tempfile.mkdtemp(dir=config.WORKSPACE_DIR)
+    boot_path = os.path.join(temp_dir, "boot.img")
+
+    try:
+        await client.download_media(document, file_name=boot_path)
+        await process_boot_img(client, message, boot_path, temp_dir, status_msg, 3 - count)
+    except Exception as e:
+        logger.error(f"Download failed: {e}")
+        await status_msg.edit_text(f"❌ Failed to download file from Telegram: {e}")
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+
+@app.on_message(filters.text & ~filters.command(["start", "help"]))
+async def handle_boot_img_link(client: Client, message: Message):
+    """Handles incoming direct download links to a boot.img."""
+    user_id = message.from_user.id
+    url = message.text.strip()
+    
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await message.reply_text("❌ Please send a valid direct download link starting with `http://` or `https://`.")
+        return
+
+    # Check limit before downloading
+    allowed, count = check_and_increment_usage(user_id)
+    if not allowed:
+        await message.reply_text("🛑 **Limit Exceeded!** You have reached your daily limit of **3 compiles per day**.")
+        return
+
+    status_msg = await message.reply_text("⏳ Downloading boot image from link...")
+    temp_dir = tempfile.mkdtemp(dir=config.WORKSPACE_DIR)
+    boot_path = os.path.join(temp_dir, "boot.img")
+
+    try:
+        # Download from URL in a separate thread/executor to prevent blocking the event loop
+        def download_url():
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=120) as response, open(boot_path, "wb") as out_file:
+                shutil.copyfileobj(response, out_file)
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, download_url)
+
+        if not os.path.exists(boot_path) or os.path.getsize(boot_path) == 0:
+            await status_msg.edit_text("❌ Downloaded file is empty or could not be retrieved.")
+            shutil.rmtree(temp_dir)
+            return
+
+        await process_boot_img(client, message, boot_path, temp_dir, status_msg, 3 - count)
+        
+    except Exception as e:
+        logger.error(f"Failed to download from link: {e}")
+        await status_msg.edit_text(f"❌ Failed to download from the link. Make sure it is a direct download link.\n\nError: `{e}`")
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
 if __name__ == "__main__":
     logger.info("Initializing bot resources...")
