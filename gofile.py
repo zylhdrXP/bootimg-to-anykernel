@@ -29,6 +29,7 @@ class GofileDownloader:
             "Referer": "https://gofile.io/",
         })
         self._account_token = token or self._create_account_token()
+        self._session.headers.update({"Authorization": f"Bearer {self._account_token}"})
 
     def _create_account_token(self) -> str:
         response = self._session.post(
