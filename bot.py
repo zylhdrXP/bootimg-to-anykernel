@@ -191,6 +191,12 @@ async def process_boot_img(client: Client, message: Message, boot_path: str, tem
         shutil.copy2(image_path, dest_image_path)
         logger.info(f"Replaced Image in AnyKernel: {dest_image_path}")
 
+        # Remove the .git directory (shallow clone) so it isn't included in the flashable zip
+        git_dir = os.path.join(anykernel_dir, ".git")
+        if os.path.exists(git_dir):
+            shutil.rmtree(git_dir)
+            logger.info("Removed .git directory from AnyKernel before archiving.")
+
         await status_msg.edit_text("🤐 Creating flashable zip archive...")
 
         zip_base_name = os.path.join(temp_dir, "AnyKernel_Flashable")
