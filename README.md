@@ -8,7 +8,7 @@ This bot uses Pyrogram (MTProto client) rather than standard HTTP Bot API, allow
 
 ## ⚙️ How it Works
 
-1. **User Interaction**: The user starts the bot using `/start` or `/help` and uploads a `.img` file (e.g. `boot.img`).
+1. **User Interaction**: The user starts the bot using `/start` or `/help` and uploads a `.img` file (e.g. `boot.img`), sends a direct download link, or a [gofile.io](https://gofile.io) link (`https://gofile.io/d/<content_id>`).
 2. **Usage Limit Checks**: The bot checks if the user is within their daily usage limit of **3 runs per day**. If the user matches the configured `OWNER_ID`, the limit check is bypassed entirely.
 3. **Magiskboot Extraction**: The bot automatically resolves and extracts `magiskboot` (x86_64 host binary) from the latest Magisk APK released on GitHub.
 4. **Unpacking**: The bot runs `./magiskboot unpack boot.img` inside an isolated temporary directory unique to the session (ensuring multiple users can run jobs simultaneously).
@@ -21,6 +21,7 @@ This bot uses Pyrogram (MTProto client) rather than standard HTTP Bot API, allow
 ## 📂 Repository Structure
 
 - `bot.py` — Core bot application handling Telegram updates, downloading files, executing subprocesses, and compiling the zip.
+- `gofile.py` — gofile.io downloader (content tree resolution, token generation, streaming download).
 - `config.py` — Central configuration logic sourcing setup parameters from environment variables.
 - `.env.example` — Template configuration file for local or VPS deployment.
 - `requirements.txt` — Python dependencies (Pyrogram and Tgcrypto).
@@ -147,7 +148,9 @@ To ensure the bot restarts automatically if the server reboots or crashes, creat
 ## 📱 How to Use the Bot
 
 1. Open a chat with your Telegram bot and send `/start`.
-2. Attach and upload your `boot.img` file as a **Document**.
+2. Attach and upload your `boot.img` file as a **Document**, OR send a direct download link, OR send a **gofile.io** link:
+   - `https://gofile.io/d/abc123` (public content)
+   - `https://gofile.io/d/abc123 mypassword` (password-protected content — append the password after the URL)
 3. The bot will send live progress messages:
    - ⏳ *Downloading your boot image...*
    - 🔧 *Verifying magiskboot tool...*
@@ -157,3 +160,14 @@ To ensure the bot restarts automatically if the server reboots or crashes, creat
    - 📤 *Uploading zip archive...*
 4. In moments, you will receive the compiled flashable zip file back.
 5. Non-owner users are restricted to 3 successful compiles daily. The caption will report the remaining count.
+
+### 📁 Gofile.io Support
+
+When a gofile.io link is provided, the bot:
+1. Creates a temporary anonymous gofile.io account (or uses your `GF_TOKEN` if configured).
+2. Recursively walks the content tree to find the `boot.img` (falls back to the first `.img` file).
+3. Streams it down to a temporary directory and feeds it into the normal repacking pipeline.
+
+Optional environment variables (see `.env.example`):
+- `GF_TOKEN` — your gofile.io account token (a temporary anonymous account is created when empty).
+- `GF_TIMEOUT` — connection/read timeout in seconds (defaults to `15.0`).

@@ -12,6 +12,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 import config
+import gofile
 
 # Setup logging
 logging.basicConfig(
@@ -237,8 +238,9 @@ async def send_welcome(client: Client, message: Message):
         "starting with `http` or `https`.\n\n"
         "📌 **How to use:**\n"
         "1. Upload your kernel's `boot.img` as a document OR paste its direct download link.\n"
-        "2. The bot will automatically download, unpack it, clone AnyKernel, swap the kernel, and pack it.\n"
-        "3. You will receive the compiled flashable zip file in seconds.\n\n"
+        "2. **Gofile.io links** (`https://gofile.io/d/...`) are also supported — add the password after the URL if the content is protected, e.g. `https://gofile.io/d/abc123 mypassword`.\n"
+        "3. The bot will automatically download, unpack it, clone AnyKernel, swap the kernel, and pack it.\n"
+        "4. You will receive the compiled flashable zip file in seconds.\n\n"
         "⚠️ **Note**: Users are limited to **3 compiles per day** (bot owner is exempt)."
     )
     await message.reply_text(welcome_text)
@@ -275,13 +277,17 @@ async def handle_boot_img_file(client: Client, message: Message):
 
 @app.on_message(filters.text & ~filters.command(["start", "help"]))
 async def handle_boot_img_link(client: Client, message: Message):
-    """Handles incoming direct download links to a boot.img."""
+    """Handles incoming direct download links to a boot.img (incl. gofile.io links)."""
     user_id = message.from_user.id
-    url = message.text.strip()
-    
+    tokens = message.text.strip().split()
+    url = tokens[0]
+    password = tokens[1] if len(tokens) > 1 else None
+
     if not (url.startswith("http://") or url.startswith("https://")):
         await message.reply_text("❌ Please send a valid direct download link starting with `http://` or `https://`.")
         return
+
+    is_gofile = "gofile.io" in url
 
     # Check limit before downloading
     allowed, count = check_and_increment_usage(user_id)
@@ -289,16 +295,26 @@ async def handle_boot_img_link(client: Client, message: Message):
         await message.reply_text("🛑 **Limit Exceeded!** You have reached your daily limit of **3 compiles per day**.")
         return
 
-    status_msg = await message.reply_text("⏳ Downloading boot image from link...")
+    source_label = "gofile.io" if is_gofile else "link"
+    status_msg = await message.reply_text(f"⏳ Downloading boot image from {source_label}...")
     temp_dir = tempfile.mkdtemp(dir=config.WORKSPACE_DIR)
     boot_path = os.path.join(temp_dir, "boot.img")
 
     try:
         # Download from URL in a separate thread/executor to prevent blocking the event loop
         def download_url():
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=120) as response, open(boot_path, "wb") as out_file:
-                shutil.copyfileobj(response, out_file)
+            if is_gofile:
+                gofile.download_bootimg(
+                    url,
+                    boot_path,
+                    password=password,
+                    token=config.GF_TOKEN,
+                    timeout=config.GF_TIMEOUT,
+                )
+            else:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=120) as response, open(boot_path, "wb") as out_file:
+                    shutil.copyfileobj(response, out_file)
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, download_url)
@@ -312,7 +328,7 @@ async def handle_boot_img_link(client: Client, message: Message):
         
     except Exception as e:
         logger.error(f"Failed to download from link: {e}")
-        await status_msg.edit_text(f"❌ Failed to download from the link. Make sure it is a direct download link.\n\nError: `{e}`")
+        await status_msg.edit_text(f"❌ Failed to download from the link. Make sure it is a direct download link or a valid gofile.io link (append the password after the URL if protected).\n\nError: `{e}`")
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
